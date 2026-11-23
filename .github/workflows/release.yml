@@ -1,0 +1,47 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing immutable version tag (vX.Y.Z)
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: Validate tag and package version
+        env:
+          PACKAGE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          node --input-type=module -e 'import assert from "node:assert/strict"; import {readFileSync,existsSync} from "node:fs"; const tag=process.env.PACKAGE_TAG; assert.match(tag,/^v\d+\.\d+\.\d+$/); const pkg=JSON.parse(readFileSync("package.json")); assert.equal(tag,"v"+pkg.version); if(existsSync("tunnelde-plugin.json")) assert.equal(pkg.version,JSON.parse(readFileSync("tunnelde-plugin.json")).version);'
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - run: npm run verify
+      - run: npm run package
+      - name: Resolve immutable source commit
+        run: echo "PACKAGE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Publish and verify immutable assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PACKAGE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: npm run publish:release
